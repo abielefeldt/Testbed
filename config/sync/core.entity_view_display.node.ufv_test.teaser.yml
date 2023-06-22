@@ -1,0 +1,33 @@
+uuid: 513f3ecb-30d2-4550-9641-52189776fa3b
+langcode: en
+status: true
+dependencies:
+  config:
+    - core.entity_view_mode.node.teaser
+    - field.field.node.ufv_test.field_link
+    - field.field.node.ufv_test.field_plaintext
+    - field.field.node.ufv_test.field_tags
+    - node.type.ufv_test
+  module:
+    - user
+id: node.ufv_test.teaser
+targetEntityType: node
+bundle: ufv_test
+mode: teaser
+content:
+  field_tags:
+    type: entity_reference_label
+    label: above
+    settings:
+      link: true
+    third_party_settings: {  }
+    weight: 10
+    region: content
+  links:
+    settings: {  }
+    third_party_settings: {  }
+    weight: 100
+    region: content
+hidden:
+  field_link: true
+  field_plaintext: true
