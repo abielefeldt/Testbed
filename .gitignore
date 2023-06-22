@@ -17,7 +17,9 @@
 /web/sites/*/private
 
 # Ignore SimpleTest multi-site environment.
-/web/sites/simpletest
+/web/sites/simpletest/**
+!/web/sites/simpletest/**/
+!/web/sites/simpletest/**/.gitkeep
 
 
 # Ignore custom modules managed by Composer.
