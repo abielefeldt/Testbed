@@ -1,0 +1,476 @@
+diff --git a/core/lib/Drupal/Core/Validation/Plugin/Validation/Constraint/UniqueFieldValueValidator.php b/core/lib/Drupal/Core/Validation/Plugin/Validation/Constraint/UniqueFieldValueValidator.php
+index e965310861a3123eaa820fa725f2929be95f59a4..6c805b459d49cb8f346eca16b40a86939fa165ec 100644
+--- a/core/lib/Drupal/Core/Validation/Plugin/Validation/Constraint/UniqueFieldValueValidator.php
++++ b/core/lib/Drupal/Core/Validation/Plugin/Validation/Constraint/UniqueFieldValueValidator.php
+@@ -17,34 +17,60 @@ public function validate($items, Constraint $constraint) {
+     if (!$item = $items->first()) {
+       return;
+     }
+-    $field_name = $items->getFieldDefinition()->getName();
++
+     /** @var \Drupal\Core\Entity\EntityInterface $entity */
+     $entity = $items->getEntity();
+-    $entity_type_id = $entity->getEntityTypeId();
+-    $id_key = $entity->getEntityType()->getKey('id');
++    $entity_type = $entity->getEntityType();
++    $entity_type_id = $entity_type->id();
++    $field_name = $items->getFieldDefinition()->getName();
+ 
+-    $query = \Drupal::entityQuery($entity_type_id)
+-      ->accessCheck(FALSE);
++    // Determine the main property name of the field that we will check.
++    $field_storage_definitions = \Drupal::service('entity_field.manager')->getFieldStorageDefinitions($entity_type_id);
++    $property_name = $field_storage_definitions[$field_name]->getMainPropertyName();
++    $is_multiple = $field_storage_definitions[$field_name]->isMultiple();
+ 
+-    $entity_id = $entity->id();
+-    // Using isset() instead of !empty() as 0 and '0' are valid ID values for
+-    // entity types using string IDs.
+-    if (isset($entity_id)) {
+-      $query->condition($id_key, $entity_id, '<>');
++    $id_key = $entity_type->getKey('id');
++    $is_new = $entity->isNew();
++    if (!$is_new) {
++      $entity_id = $entity->id();
+     }
+ 
+-    $value_taken = (bool) $query
+-      ->condition($field_name, $item->value)
+-      ->range(0, 1)
+-      ->count()
+-      ->execute();
+-
+-    if ($value_taken) {
+-      $this->context->addViolation($constraint->message, [
+-        '%value' => $item->value,
+-        '@entity_type' => $entity->getEntityType()->getSingularLabel(),
+-        '@field_name' => $items->getFieldDefinition()->getLabel(),
+-      ]);
++    // Running through all items in the the item list.
++    $item_values = [];
++    foreach ($items as $delta => $item) {
++      // Check if the value already exists in other entities.
++      $query = \Drupal::entityQuery($entity_type_id)
++        ->accessCheck(FALSE)
++        ->condition($field_name, $item->{$property_name});
++      if (!$is_new) {
++        $query->condition($id_key, $entity_id, '<>');
++      }
++      $value_taken = (bool) $query->range(0, 1)
++        ->count()
++        ->execute();
++
++      $value_taken_own = FALSE;
++      // Check if the value already exists in the current entity but with another delta.
++      if ($is_multiple) {
++        if (in_array($item->{$property_name}, $item_values)) {
++          $value_taken_own = TRUE;
++        }
++        else {
++          $item_values[] = $item->{$property_name};
++        }
++      }
++
++      if ($value_taken || $value_taken_own) {
++        $violation = $this->context
++          ->buildViolation($constraint->message)
++          ->setParameter('@entity_type', $entity->getEntityType()->getSingularLabel())
++          ->setParameter('@field_name', $items->getFieldDefinition()->getLabel())
++          ->setParameter('%value', $item->{$property_name});
++        if ($is_multiple) {
++          $violation->atPath($delta);
++        }
++        $violation->addViolation();
++      }
+     }
+   }
+ 
+diff --git a/core/modules/system/tests/modules/entity_test/entity_test.info.yml b/core/modules/system/tests/modules/entity_test/entity_test.info.yml
+index abe33de89bb2f9587d3b62527008a3dce8a2be28..f2231a93c28481e16737c9a80002e528439ab4b2 100644
+--- a/core/modules/system/tests/modules/entity_test/entity_test.info.yml
++++ b/core/modules/system/tests/modules/entity_test/entity_test.info.yml
+@@ -7,3 +7,4 @@ dependencies:
+   - drupal:field
+   - drupal:text
+   - drupal:system
++  - drupal:user
+diff --git a/core/modules/system/tests/modules/entity_test/src/Entity/EntityTestUniqueConstraint.php b/core/modules/system/tests/modules/entity_test/src/Entity/EntityTestUniqueConstraint.php
+new file mode 100644
+index 0000000000000000000000000000000000000000..340e3eaba39c8d3cf3c14e7362bf7354ff814bed
+--- /dev/null
++++ b/core/modules/system/tests/modules/entity_test/src/Entity/EntityTestUniqueConstraint.php
+@@ -0,0 +1,51 @@
++<?php
++
++namespace Drupal\entity_test\Entity;
++
++use Drupal\Core\Entity\EntityTypeInterface;
++use Drupal\Core\Field\BaseFieldDefinition;
++
++/**
++ * Defines a test entity class for unique constraint.
++ *
++ * @ContentEntityType(
++ *   id = "entity_test_unique_constraint",
++ *   label = @Translation("unique field entity"),
++ *   handlers = {
++ *     "view_builder" = "Drupal\entity_test\EntityTestViewBuilder",
++ *     "access" = "Drupal\entity_test\EntityTestAccessControlHandler",
++ *     "form" = {
++ *       "default" = "Drupal\entity_test\EntityTestForm"
++ *     },
++ *     "translation" = "Drupal\content_translation\ContentTranslationHandler",
++ *   },
++ *   base_table = "entity_test_unique_constraint",
++ *   data_table = "entity_test_unique_constraint_data",
++ *   entity_keys = {
++ *     "id" = "id",
++ *     "uuid" = "uuid",
++ *   },
++ * )
++ */
++class EntityTestUniqueConstraint extends EntityTest {
++
++  /**
++   * {@inheritdoc}
++   */
++  public static function baseFieldDefinitions(EntityTypeInterface $entity_type) {
++    $fields = parent::baseFieldDefinitions($entity_type);
++
++    $fields['field_test_text'] = BaseFieldDefinition::create('string')
++      ->setLabel(t('unique_field_test'))
++      ->setCardinality(3)
++      ->addConstraint('UniqueField');
++
++    $fields['field_test_reference'] = BaseFieldDefinition::create('entity_reference')
++      ->setLabel(t('unique_reference_test'))
++      ->setCardinality(2)
++      ->addConstraint('UniqueField')
++      ->setSetting('target_type', 'user');
++    return $fields;
++  }
++
++}
+diff --git a/core/tests/Drupal/KernelTests/Core/Validation/UniqueValuesConstraintValidatorTest.php b/core/tests/Drupal/KernelTests/Core/Validation/UniqueValuesConstraintValidatorTest.php
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d95c683ad2284911cc80eec0729eea84668f5f6
+--- /dev/null
++++ b/core/tests/Drupal/KernelTests/Core/Validation/UniqueValuesConstraintValidatorTest.php
+@@ -0,0 +1,317 @@
++<?php
++
++namespace Drupal\KernelTests\Core\Validation;
++
++use Drupal\KernelTests\KernelTestBase;
++use Drupal\entity_test\Entity\EntityTestUniqueConstraint;
++use Drupal\Tests\user\Traits\UserCreationTrait;
++use Drupal\user\Entity\User;
++
++/**
++ * Tests the unique field value validation constraint.
++ *
++ * @coversDefaultClass \Drupal\Core\Validation\Plugin\Validation\Constraint\UniqueFieldValueValidator
++ *
++ * @group Validation
++ */
++class UniqueValuesConstraintValidatorTest extends KernelTestBase {
++  use UserCreationTrait;
++
++  /**
++   * {@inheritdoc}
++   */
++  protected static $modules = [
++    'entity_test',
++    'unique_field_constraint_test',
++    'user',
++  ];
++
++  /**
++   * Tests cases where the validation passes for entities with string IDs.
++   *
++   * @covers ::validate
++   */
++  protected function setUp(): void {
++    parent::setUp();
++    $this->setUpCurrentUser();
++    $this->installEntitySchema('entity_test_unique_constraint');
++  }
++
++  /**
++   * Tests the UniqueField validation constraint validator.
++   *
++   * Case 1. Try to create another entity with existing value for unique field.
++   *
++   * @throws \Drupal\Core\Entity\EntityStorageException
++   *
++   * @covers ::validate
++   */
++  public function testValidation() {
++    // Create entity with two values for the testing field.
++    $definition = [
++      'id' => (int) rand(0, getrandmax()),
++      'user_id' => 0,
++      'field_test_text' => [
++        'text1',
++        'text2',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(0, count($violations));
++    $entity->save();
++    unset($entity);
++
++    // Create another entity with two values for the testing field.
++    $definition = [
++      'id' => (int) rand(0, getrandmax()),
++      'user_id' => 0,
++      'field_test_text' => [
++        'text3',
++        'text4',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(0, count($violations));
++    $entity->save();
++
++    // Add existing value.
++    $value = 'text1';
++    $entity->get('field_test_text')->appendItem($value);
++    $violations = $entity->validate();
++    $this->assertEquals(1, count($violations));
++    $this->assertEquals('field_test_text.2', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $value,
++    ]), $violations[0]->getMessage());
++    unset($entity);
++
++    // Create another entity with two values, but one value is existing.
++    $definition = [
++      'id' => (int) rand(0, getrandmax()),
++      'user_id' => 0,
++      'field_test_text' => [
++        'text5',
++        'text1',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(1, count($violations));
++    $this->assertEquals('field_test_text.1', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][1],
++    ]), $violations[0]->getMessage());
++    unset($entity);
++
++  }
++
++  /**
++   * Tests the UniqueField validation constraint validator for entity reference fields.
++   *
++   * Case 2. Try to create another entity with existing reference for unique field.
++   *
++   * @throws \Drupal\Core\Entity\EntityStorageException
++   *
++   * @covers ::validate
++   */
++  public function testValidationReference() {
++
++    $users = [];
++    for ($i = 0; $i <= 5; $i++) {
++      $users[$i] = User::create([
++        'name' => "Test user $i",
++        'mail' => "test{$i}@example.com",
++        'created' => \Drupal::time()->getRequestTime(),
++        'status' => 1,
++        'language' => 'en',
++      ]);
++      $users[$i]->save();
++    }
++
++    // Create new entity with two identical references.
++    $definition = [
++      'user_id' => 0,
++      'field_test_reference' => [
++        $users[0]->id(),
++        $users[0]->id(),
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(1, count($violations));
++    $this->assertEquals('field_test_reference.1', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_reference_test %value already exists.', [
++      '%value' => $definition['field_test_reference'][1],
++    ]), $violations[0]->getMessage());
++    unset($entity);
++
++    // Create entity with two references for the testing field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_reference' => [
++        $users[1]->id(),
++        $users[2]->id(),
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(0, count($violations));
++    $entity->save();
++    unset($entity);
++
++    // Create another entity with two references for the testing field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_reference' => [
++        $users[3]->id(),
++        $users[4]->id(),
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(0, count($violations));
++    $entity->save();
++    unset($entity);
++
++    // Create another entity with two references, but one reference is existing.
++    $definition = [
++      'user_id' => 0,
++      'field_test_reference' => [
++        $users[5]->id(),
++        $users[1]->id(),
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(1, count($violations));
++    $this->assertEquals('field_test_reference.1', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_reference_test %value already exists.', [
++      '%value' => $definition['field_test_reference'][1],
++    ]), $violations[0]->getMessage());
++    unset($entity);
++
++  }
++
++  /**
++   * Tests the UniqueField validation constraint validator for existing value in the same entity.
++   *
++   * Case 3. Try to add existing value for unique field in the same entity.
++   *
++   * @throws \Drupal\Core\Entity\EntityStorageException
++   *
++   * @covers ::validate
++   */
++  public function testValidationOwn() {
++    // Create new entity with two identical values for the testing field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_text' => [
++        'text0',
++        'text0',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(1, count($violations));
++    $this->assertEquals('field_test_text.1', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][1],
++    ]), $violations[0]->getMessage());
++    unset($entity);
++
++    // Create entity with two different values for the testing field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_text' => [
++        'text1',
++        'text2',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(0, count($violations));
++    $entity->save();
++
++    // Add existing value.
++    $entity->get('field_test_text')->appendItem($definition['field_test_text'][0]);
++    $violations = $entity->validate();
++    $this->assertEquals(1, count($violations));
++    $this->assertEquals('field_test_text.2', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][0],
++    ]), $violations[0]->getMessage());
++
++  }
++
++  /**
++   * Tests the UniqueField validation constraint validator for multiple violations.
++   *
++   * Case 4. Try to add multiple existing values for unique field in the same entity.
++   *
++   * @throws \Drupal\Core\Entity\EntityStorageException
++   *
++   * @covers ::validate
++   */
++  public function testValidationMultiple() {
++    // Create entity with two different values for the testing field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_text' => [
++        'multi0',
++        'multi1',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(0, count($violations));
++    $entity->save();
++
++    // Create new entity with three identical values in unique field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_text' => [
++        'multi2',
++        'multi2',
++        'multi2',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(2, count($violations));
++    $this->assertEquals('field_test_text.1', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][1],
++    ]), $violations[0]->getMessage());
++    $this->assertEquals('field_test_text.2', $violations[1]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][2],
++    ]), $violations[1]->getMessage());
++    unset($entity);
++
++    // Create new entity with two identical values and one existing value in unique field.
++    $definition = [
++      'user_id' => 0,
++      'field_test_text' => [
++        'multi3',
++        'multi1',
++        'multi3',
++      ],
++    ];
++    $entity = EntityTestUniqueConstraint::create($definition);
++    $violations = $entity->validate();
++    $this->assertEquals(2, count($violations));
++    $this->assertEquals('field_test_text.1', $violations[0]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][1],
++    ]), $violations[0]->getMessage());
++    $this->assertEquals('field_test_text.2', $violations[1]->getPropertyPath());
++    $this->assertEquals(t('A unique field entity with unique_field_test %value already exists.', [
++      '%value' => $definition['field_test_text'][2],
++    ]), $violations[1]->getMessage());
++    unset($entity);
++
++  }
++
++}

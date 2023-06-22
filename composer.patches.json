@@ -1,0 +1,7 @@
+{
+  "patches": {
+    "drupal/core": {
+      "UniqueField doesn't account for multivalue fields.": "./patches/3811.diff"
+    }
+  }
+}
