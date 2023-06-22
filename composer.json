@@ -48,6 +48,9 @@
         "drupal-scaffold": {
             "locations": {
                 "web-root": "web/"
+            },
+            "file-mapping": {
+                "[web-root]/core/phpunit.xml": "assets/phpunit.xml"
             }
         },
         "installer-paths": {
